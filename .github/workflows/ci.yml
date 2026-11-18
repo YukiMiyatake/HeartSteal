@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  docs-integrity:
+    name: Docs integrity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Required docs exist
+        run: |
+          set -euo pipefail
+          required=(
+            README.md
+            docs/concept.md
+            docs/design-notes.md
+            docs/question-design.md
+            docs/recommendation-engine.md
+            docs/architecture.md
+            docs/roadmap.md
+          )
+          for f in "${required[@]}"; do
+            if [[ ! -f "$f" ]]; then
+              echo "Missing required file: $f"
+              exit 1
+            fi
+            echo "OK $f"
+          done
+
+      - name: README docs links resolve
+        run: |
+          set -euo pipefail
+          # Extract markdown links to docs/* or README-relative paths from README
+          mapfile -t links < <(grep -oE '\[[^\]]+\]\((docs/[^)]+|[\w./-]+\.md)\)' README.md | sed -E 's/.*\((.*)\)/\1/' | sort -u)
+          if [[ ${#links[@]} -eq 0 ]]; then
+            echo "No local markdown links found in README (warning only)"
+            exit 0
+          fi
+          for link in "${links[@]}"; do
+            # strip anchors
+            path="${link%%#*}"
+            if [[ ! -f "$path" ]]; then
+              echo "Broken README link: $link"
+              exit 1
+            fi
+            echo "Linked OK $path"
+          done
+
+      - name: Design-notes referenced from concept
+        run: |
+          set -euo pipefail
+          grep -q 'design-notes.md' docs/concept.md
+          echo "concept references design-notes"

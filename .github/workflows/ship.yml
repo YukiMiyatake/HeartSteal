@@ -1,0 +1,181 @@
+name: Ship feature branch
+
+on:
+  push:
+    branches: ['cursor/**']
+
+concurrency:
+  group: ship-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+
+jobs:
+  rebase-pr-merge:
+    name: Rebase, CI gate, merge to main
+    runs-on: ubuntu-latest
+    # GITHUB_TOKEN pushes do not re-trigger workflows; still skip bot actors defensively.
+    if: github.actor != 'github-actions[bot]'
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch main
+        run: git fetch origin main:main
+
+      - name: Rebase onto main (with conflict auto-resolve attempt)
+        id: rebase
+        run: |
+          set -euo pipefail
+          BRANCH="${GITHUB_REF_NAME}"
+
+          if git rebase main; then
+            echo "rebase_ok=true" >> "$GITHUB_OUTPUT"
+            echo "Rebase clean"
+            exit 0
+          fi
+
+          echo "Rebase conflicted — attempting path-safe auto-resolve"
+
+          # During rebase: stage2/ours = main (upstream), stage3/theirs = feature commit.
+          # - feature-only change: keep --theirs
+          # - main-only change: keep --ours
+          # - both modified: fail (needs human)
+          both=0
+          while IFS= read -r path; do
+            [[ -z "$path" ]] && continue
+            stage2=$(git ls-files -u -- "$path" | awk '$2==2 {print}' | wc -l)
+            stage3=$(git ls-files -u -- "$path" | awk '$2==3 {print}' | wc -l)
+
+            if [[ "$stage2" -gt 0 && "$stage3" -gt 0 ]]; then
+              echo "Both sides modified: $path"
+              both=1
+              continue
+            fi
+            if [[ "$stage3" -gt 0 ]]; then
+              git checkout --theirs -- "$path"
+              git add -- "$path"
+              echo "Kept feature version: $path"
+            elif [[ "$stage2" -gt 0 ]]; then
+              git checkout --ours -- "$path"
+              git add -- "$path"
+              echo "Kept main version: $path"
+            else
+              git add -- "$path" || git rm -f -- "$path" || true
+              echo "Staged edge conflict: $path"
+            fi
+          done < <(git diff --name-only --diff-filter=U)
+
+          if [[ "$both" -ne 0 ]]; then
+            git rebase --abort || true
+            echo "rebase_ok=false" >> "$GITHUB_OUTPUT"
+            echo "unresolved=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          GIT_EDITOR=true git rebase --continue
+          echo "rebase_ok=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push rebased branch
+        if: steps.rebase.outputs.rebase_ok == 'true'
+        run: |
+          set -euo pipefail
+          git push --force-with-lease origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Ensure pull request exists
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BRANCH="${GITHUB_REF_NAME}"
+          EXISTING=$(gh pr list --head "$BRANCH" --base main --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            echo "number=$EXISTING" >> "$GITHUB_OUTPUT"
+            echo "PR already exists #$EXISTING"
+            exit 0
+          fi
+          TITLE=$(git log -1 --pretty=%s)
+          BODY='## Summary
+- Feature branch auto-shipped by GitHub Actions
+- Inline docs CI must pass before merge
+- Rebased onto main (path-safe conflict auto-resolve when possible)
+
+## Test plan
+- [ ] Ship workflow green
+- [ ] PR diff looks correct'
+          URL=$(gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY")
+          NUMBER=$(echo "$URL" | grep -oE '[0-9]+$')
+          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
+          echo "Created PR #$NUMBER"
+
+      - name: Comment on unresolved conflicts
+        if: steps.rebase.outputs.unresolved == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          NUMBER="${{ steps.pr.outputs.number }}"
+          if [[ -z "$NUMBER" ]]; then
+            NUMBER=$(gh pr list --head "${GITHUB_REF_NAME}" --base main --json number --jq '.[0].number // empty')
+          fi
+          if [[ -z "$NUMBER" ]]; then
+            TITLE=$(git log -1 --pretty=%s)
+            URL=$(gh pr create --base main --head "${GITHUB_REF_NAME}" --title "$TITLE" --body "Conflicted with main; needs manual resolution.")
+            NUMBER=$(echo "$URL" | grep -oE '[0-9]+$')
+          fi
+          if [[ -n "$NUMBER" ]]; then
+            gh pr comment "$NUMBER" --body 'Auto-rebase failed: both sides modified the same file(s). Resolve locally with `git fetch origin && git rebase origin/main`, then `git push --force-with-lease`. This workflow will retry CI + merge.'
+          fi
+          exit 1
+
+      - name: Run docs CI locally in this job
+        if: steps.rebase.outputs.rebase_ok == 'true'
+        run: |
+          set -euo pipefail
+          required=(
+            README.md
+            docs/concept.md
+            docs/design-notes.md
+            docs/question-design.md
+            docs/recommendation-engine.md
+            docs/architecture.md
+            docs/roadmap.md
+          )
+          for f in "${required[@]}"; do
+            test -f "$f"
+          done
+          mapfile -t links < <(grep -oE '\[[^\]]+\]\((docs/[^)]+|[\w./-]+\.md)\)' README.md | sed -E 's/.*\((.*)\)/\1/' | sort -u || true)
+          for link in "${links[@]:-}"; do
+            [[ -z "${link:-}" ]] && continue
+            path="${link%%#*}"
+            test -f "$path"
+          done
+          grep -q 'design-notes.md' docs/concept.md
+
+      - name: Merge PR into main
+        if: steps.rebase.outputs.rebase_ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          NUMBER="${{ steps.pr.outputs.number }}"
+          # Prefer squash for linear history on docs/features
+          if gh pr merge "$NUMBER" --squash --delete-branch; then
+            echo "Merged #$NUMBER"
+            exit 0
+          fi
+          # If blocked by freshness, retry once after short wait
+          sleep 5
+          gh pr merge "$NUMBER" --squash --delete-branch
