@@ -107,14 +107,15 @@ jobs:
             exit 0
           fi
           TITLE=$(git log -1 --pretty=%s)
-          BODY='## Summary
-- Feature branch auto-shipped by GitHub Actions
-- Inline docs CI must pass before merge
-- Rebased onto main (path-safe conflict auto-resolve when possible)
-
-## Test plan
-- [ ] Ship workflow green
-- [ ] PR diff looks correct'
+          BODY=$(printf '%s\n' \
+            '## Summary' \
+            '- Feature branch auto-shipped by GitHub Actions' \
+            '- Inline docs CI must pass before merge' \
+            '- Rebased onto main (path-safe conflict auto-resolve when possible)' \
+            '' \
+            '## Test plan' \
+            '- [ ] Ship workflow green' \
+            '- [ ] PR diff looks correct')
           URL=$(gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY")
           NUMBER=$(echo "$URL" | grep -oE '[0-9]+$')
           echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
