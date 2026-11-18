@@ -11,13 +11,12 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
-  checks: write
+  issues: write
 
 jobs:
-  rebase-pr-merge:
-    name: Rebase, CI gate, merge to main
+  rebase-ci-merge:
+    name: Rebase, CI, merge to main
     runs-on: ubuntu-latest
-    # GITHUB_TOKEN pushes do not re-trigger workflows; still skip bot actors defensively.
     if: github.actor != 'github-actions[bot]'
     steps:
       - name: Checkout feature branch
@@ -34,11 +33,10 @@ jobs:
       - name: Fetch main
         run: git fetch origin main:main
 
-      - name: Rebase onto main (with conflict auto-resolve attempt)
+      - name: Rebase onto main (path-safe conflict auto-resolve)
         id: rebase
         run: |
           set -euo pipefail
-          BRANCH="${GITHUB_REF_NAME}"
 
           if git rebase main; then
             echo "rebase_ok=true" >> "$GITHUB_OUTPUT"
@@ -47,11 +45,7 @@ jobs:
           fi
 
           echo "Rebase conflicted — attempting path-safe auto-resolve"
-
-          # During rebase: stage2/ours = main (upstream), stage3/theirs = feature commit.
-          # - feature-only change: keep --theirs
-          # - main-only change: keep --ours
-          # - both modified: fail (needs human)
+          # During rebase: ours = main, theirs = feature commit
           both=0
           while IFS= read -r path; do
             [[ -z "$path" ]] && continue
@@ -80,69 +74,13 @@ jobs:
           if [[ "$both" -ne 0 ]]; then
             git rebase --abort || true
             echo "rebase_ok=false" >> "$GITHUB_OUTPUT"
-            echo "unresolved=true" >> "$GITHUB_OUTPUT"
-            exit 0
+            exit 1
           fi
 
           GIT_EDITOR=true git rebase --continue
           echo "rebase_ok=true" >> "$GITHUB_OUTPUT"
 
-      - name: Push rebased branch
-        if: steps.rebase.outputs.rebase_ok == 'true'
-        run: |
-          set -euo pipefail
-          git push --force-with-lease origin "HEAD:${GITHUB_REF_NAME}"
-
-      - name: Ensure pull request exists
-        id: pr
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          BRANCH="${GITHUB_REF_NAME}"
-          EXISTING=$(gh pr list --head "$BRANCH" --base main --json number --jq '.[0].number // empty')
-          if [[ -n "$EXISTING" ]]; then
-            echo "number=$EXISTING" >> "$GITHUB_OUTPUT"
-            echo "PR already exists #$EXISTING"
-            exit 0
-          fi
-          TITLE=$(git log -1 --pretty=%s)
-          BODY=$(printf '%s\n' \
-            '## Summary' \
-            '- Feature branch auto-shipped by GitHub Actions' \
-            '- Inline docs CI must pass before merge' \
-            '- Rebased onto main (path-safe conflict auto-resolve when possible)' \
-            '' \
-            '## Test plan' \
-            '- [ ] Ship workflow green' \
-            '- [ ] PR diff looks correct')
-          URL=$(gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY")
-          NUMBER=$(echo "$URL" | grep -oE '[0-9]+$')
-          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
-          echo "Created PR #$NUMBER"
-
-      - name: Comment on unresolved conflicts
-        if: steps.rebase.outputs.unresolved == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          NUMBER="${{ steps.pr.outputs.number }}"
-          if [[ -z "$NUMBER" ]]; then
-            NUMBER=$(gh pr list --head "${GITHUB_REF_NAME}" --base main --json number --jq '.[0].number // empty')
-          fi
-          if [[ -z "$NUMBER" ]]; then
-            TITLE=$(git log -1 --pretty=%s)
-            URL=$(gh pr create --base main --head "${GITHUB_REF_NAME}" --title "$TITLE" --body "Conflicted with main; needs manual resolution.")
-            NUMBER=$(echo "$URL" | grep -oE '[0-9]+$')
-          fi
-          if [[ -n "$NUMBER" ]]; then
-            gh pr comment "$NUMBER" --body 'Auto-rebase failed: both sides modified the same file(s). Resolve locally with `git fetch origin && git rebase origin/main`, then `git push --force-with-lease`. This workflow will retry CI + merge.'
-          fi
-          exit 1
-
-      - name: Run docs CI locally in this job
-        if: steps.rebase.outputs.rebase_ok == 'true'
+      - name: Docs CI
         run: |
           set -euo pipefail
           required=(
@@ -156,27 +94,50 @@ jobs:
           )
           for f in "${required[@]}"; do
             test -f "$f"
+            echo "OK $f"
           done
-          mapfile -t links < <(grep -oE '\[[^\]]+\]\((docs/[^)]+|[\w./-]+\.md)\)' README.md | sed -E 's/.*\((.*)\)/\1/' | sort -u || true)
+          mapfile -t links < <(grep -oE '\[[^\]]+\]\((docs/[^)]+|[A-Za-z0-9_./-]+\.md)\)' README.md | sed -E 's/.*\((.*)\)/\1/' | sort -u || true)
           for link in "${links[@]:-}"; do
             [[ -z "${link:-}" ]] && continue
             path="${link%%#*}"
             test -f "$path"
+            echo "Linked OK $path"
           done
           grep -q 'design-notes.md' docs/concept.md
 
-      - name: Merge PR into main
-        if: steps.rebase.outputs.rebase_ok == 'true'
+      - name: Fast-forward main
+        run: |
+          set -euo pipefail
+          # Feature branch is rebased on main; push as fast-forward to main.
+          git push origin "HEAD:main"
+          echo "Merged ${GITHUB_REF_NAME} -> main at $(git rev-parse --short HEAD)"
+
+      - name: Update feature branch tip (optional sync)
+        run: |
+          set -euo pipefail
+          git push origin "HEAD:${GITHUB_REF_NAME}" || true
+
+      - name: Open issue on rebase failure
+        if: failure() && steps.rebase.outcome == 'failure'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          NUMBER="${{ steps.pr.outputs.number }}"
-          # Prefer squash for linear history on docs/features
-          if gh pr merge "$NUMBER" --squash --delete-branch; then
-            echo "Merged #$NUMBER"
-            exit 0
-          fi
-          # If blocked by freshness, retry once after short wait
-          sleep 5
-          gh pr merge "$NUMBER" --squash --delete-branch
+          TITLE="Ship blocked: conflicts on ${GITHUB_REF_NAME}"
+          BODY=$(printf '%s\n' \
+            "Auto-rebase onto main failed because both sides modified the same file(s)." \
+            "" \
+            "Branch: \`${GITHUB_REF_NAME}\`" \
+            "Commit: ${GITHUB_SHA}" \
+            "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            "" \
+            "Resolve locally:" \
+            "" \
+            '```bash' \
+            "git fetch origin" \
+            "git checkout ${GITHUB_REF_NAME}" \
+            "git rebase origin/main" \
+            "# fix conflicts" \
+            "git push --force-with-lease" \
+            '```')
+          gh issue create --title "$TITLE" --body "$BODY" || echo "Could not open issue"

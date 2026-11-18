@@ -12,19 +12,20 @@ alwaysApply: true
 1. 作業用 feature ブランチを使う（未作成なら作成）
    - プレフィックス: `cursor/`（例: `cursor/short-description`）
 2. 関連変更だけを commit する（秘密情報は含めない）
-3. `git push -u origin HEAD` で feature ブランチを remote へ push する
-4. **main へのマージ・コンフリクト解消は GitHub Actions に任せる**
-   - エージェントは原則 `main` へ直接 push しない
-   - エージェントは原則ローカルで `main` に merge しない
-5. push 後、Actions / PR の状態を確認し、失敗していれば修正コミットを同ブランチへ追加 push する
+3. feature ブランチを remote へ push する
+   - 可能なら SSH: `git push git@github.com:<owner>/<repo>.git HEAD:cursor/...`
+   - HTTPS OAuth は `.github/workflows/*` の更新に `workflow` scope が必要
+4. **main への rebase・コンフリクト解消・CI・main 反映は GitHub Actions（`ship.yml`）に任せる**
+   - エージェントは原則ローカルから `main` へ push / merge しない
+5. push 後、Actions を確認し、失敗していれば同ブランチへ修正コミットを追加 push する
 
 ## GitHub Actions が担うこと
 
-- PR 自動作成（`cursor/**` ブランチ）
-- CI（ドキュメント整合チェック）
+- `cursor/**` push を検知
 - `main` への rebase
-- コンフリクト時の自動解消試行（失敗時は PR コメント）
-- CI 成功後の `main` へ merge
+- 片側変更のコンフリクト自動解消（両側編集は Issue 化して失敗）
+- ドキュメント CI
+- 成功時に `main` へ fast-forward push
 
 ## 例外
 
