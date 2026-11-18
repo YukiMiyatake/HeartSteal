@@ -1,213 +1,151 @@
 # HeartSteal
 
-> あなたが好きなのはチャンピオンではない。
+> あなたが好きなのはアイテムではない。
 > あなたが求めている体験だ。
+> そして、あなたが即冷める理由もだ。
 
-HeartSteal は League of Legends プレイヤー向けの深層嗜好分析プラットフォームです。
+HeartSteal はドメイン横断の **Preference Operating System** です。
 
-既存のチャンピオン推薦サービスは、
+推薦カタログを巨大化するサービスではありません。
+「なぜ好きか／なぜ即冷めるか」を表現し、照合し、更新する基盤です。
 
-- 使用チャンピオン
-- 勝率
-- ピック率
-- レーン
-
-などの客観的データからおすすめを提示します。
-
-HeartStealは異なります。
-
-私たちは
-
-「なぜそのチャンピオンが好きなのか」
-
-を分析し、プレイヤー自身も気付いていない本質的な価値観を発見することを目的とします。
+最初のドメインパックは League of Legends。
+同じコアの上に Movies（および将来の Anime / Music / Books）を載せます。
 
 ---
 
-# 問題
+# 一句の定義
 
-例えば Ahri を好むプレイヤーがいた場合、
+HeartSteal is not a recommendation service.
 
-既存サービスでは
+HeartSteal is a Preference OS that discovers why people love — and instantly reject — what they experience.
 
-```text
-Ahri
-↓
-LeBlanc
-```
+---
 
-のような推薦が行われます。
+# 既存ツールの限界
 
-しかし本当に重要なのは、
+## LoL ツール
 
-```text
-なぜ Ahri が好きなのか
-```
+勝率・ピック率・レーンなど客観データからおすすめする。
 
-です。
-
-プレイヤーによって理由は全く異なります。
-
-例:
+同じ Ahri メインでも
 
 - 機動力が好き
 - ピック性能が好き
 - プレイメイクが好き
-- 見た目が好き
-- キャラクター設定が好き
+- キャラ設定が好き
 
-同じ Ahri メインでも価値観は異なります。
+理由は全く異なる。
 
-HeartSteal はその違いを分析します。
+## Netflix 型
+
+ジャンルや視聴ログの平均嗜好に最適化する。
+
+しかし人によっては
+
+- 世界設定の矛盾
+- 作り手の知識不足
+- トーンの破綻
+
+といった **測りにくい指数** で即冷める。
+ジャンル一致だけではマッチしない。
+
+## 素のチャット AI
+
+自由対話だけでは、主観語の個人意味や dealbreaker を効率よく特定できない。
 
 ---
 
-# コンセプト
+# Preference OS の核
 
-HeartStealが分析するのは
+HeartSteal が変える一点:
 
-「好きなチャンピオン」
+「好きな理由のベクトルで似た人を探す」
 
-ではなく
+から
 
-「好きだと感じる理由」
+**「拒否は切る・好みは分解する・説明は読めて直せる・ドメインはパックで差し替える」**
 
-です。
+へ。
+
+| 層 | 役割 | 映画の例 | LoL の例 |
+|---|---|---|---|
+| Hard veto | 違反したら候補除外 | 世界観の致命的矛盾 | 味方依存が耐えられない |
+| Soft aspects | 相対的な好みの強さ | 設定密度、知識の厚み | 主導権、ピック、機動力 |
+| Experience goals | 得たい体験 | 知的充足、没入 | プレイメイク、成長実感 |
+
+横断で共有するのはチャンピオン名やジャンルではない。
+**Consistency / Agency / CraftDepth** などの meta-aspect と、ユーザー自身のプロファイルである。
 
 ---
 
-# MVP
+# Dual Preference Model
+
+ユーザーは単一ベクトルではなく次を持つ。
+
+- 層 A … このアイテムの好き／嫌い理由
+- 層 B `soft_weights` … 今後のグローバル重要度（A の平均ではない）
+- 層 C `hard_vetoes` … dealbreaker（確認済みのみ）
+- 層 D `experience_goals` … 得たい体験（最大 2）
+- 構造化プロファイル … 再ランクの正本（NL は窓）
+
+映画の「設定矛盾で即冷め」は soft の低点ではなく **hard veto**。
+
+## ベクトルの取り方
+
+**能動が正、受動は検証。**
+
+- アンケート Seed（5分）/ 追加質問 / critique / 構造化編集 → ベクトル
+- 試合数・視聴完了 → 当たったかの計測（嗜好の代替にしない）
+
+---
+
+# 推薦パイプライン（要約）
+
+1. Hard filter（veto ∧ item confidence）
+2. Aspect match（観測済み次元のみ）
+3. Similar users（共通観測が十分なときだけ）
+4. Novelty / coverage
+5. Reason cards（primary 軸のみ）
+
+協調フィルタ単独には依存しない。
+ユーザー密度が薄い初期でも aspect match で動く。
+
+詳細は [docs/recommendation-engine.md](docs/recommendation-engine.md)。
+
+---
+
+# MVP（LoL Core v0）
 
 ## ユーザー登録
 
 Googleログイン
 
----
+## 短時間 Elicitation（≤5分）
 
-## チャンピオン評価
+- primary role
+- 好き 3 / 嫌い 2
+- 各最大 2 の「なぜ」
+- 今後も重視するか（グローバル重要度）
+- hard veto 最大 3（確認必須）
+- experience goals 最大 2
 
-ユーザーは好きなチャンピオンや嫌いなチャンピオンを登録します。
+## カタログ
 
-各チャンピオンに対し、
+主要チャンピオンの curated facet（confidence 付き）が必須。
 
-以下のような項目を評価します。
+## 深層プロファイル
 
-### 例
+A/B/C/D を分離。未観測は埋めない。
 
-- 機動力
-- 主導権
-- ピック性能
-- プレイメイク
-- 集団戦
-- レーン戦
-- キル性能
-- キャリー力
-- 安定性
-- 爽快感
-- 難易度
-- 見た目
-- キャラクター設定
+## ハイブリッド推薦
 
----
+Aspect match 本体 + 条件付き類似ユーザー + 理由表示。
 
-## 深層プロファイル生成
+## フィードバック
 
-ユーザーごとに価値観ベクトルを生成します。
-
-例:
-
-```json
-{
-  "playmaking": 0.91,
-  "pick": 0.95,
-  "mobility": 0.84,
-  "burst": 0.75
-}
-```
-
----
-
-## 類似プレイヤー検索
-
-同じチャンピオンを使っているかではなく、
-
-同じ価値観を持つプレイヤーを発見します。
-
-例:
-
-```text
-あなたと93%一致
-```
-
----
-
-## チャンピオン推薦
-
-類似プレイヤーが高評価しているチャンピオンを推薦します。
-
-例:
-
-```text
-1. Hwei
-2. Lissandra
-3. Taliyah
-```
-
----
-
-# 推薦後フィードバック
-
-HeartStealが重視するのは推薦の結果です。
-
-推薦後に以下を収集します。
-
-### 興味度
-
-1〜5
-
----
-
-### 使用状況
-
-- 未使用
-- 1〜2試合
-- 3〜10試合
-- 10〜30試合
-- 30試合以上
-
----
-
-### 継続利用意向
-
-1〜5
-
----
-
-### 実際どうだったか
-
-- 予想より良かった
-- 予想通り
-- 予想より悪かった
-
----
-
-# システム思想
-
-HeartStealは
-
-「何が好きか」
-
-より
-
-「なぜ好きなのか」
-
-を重要視します。
-
-さらに
-
-「なぜ推薦が外れたのか」
-
-を学習し続けます。
+興味・使用量・継続・critique。
+veto 変更は提案→確認。
 
 ---
 
@@ -235,25 +173,43 @@ HeartStealは
 
 - Drizzle ORM
 
+初期は LLM を推薦本体に使わない。
+プロファイル要約と批判文の構造化に限定する。
+
 ---
 
-# 将来構想
+# ドメイン展開
 
-League of Legendsで構築した推薦基盤を利用し、
+| モード | 役割 |
+|---|---|
+| HeartSteal LoL | 楔。Closed Beta でコア検証 |
+| HeartSteal Movies | 2つ目のドメインパック。自己モデルの持ち歩きを検証 |
+| Anime / Music / Books | 同一コア上の追加パック |
 
-- HeartSteal Movies
-- HeartSteal Music
-- HeartSteal Anime
-- HeartSteal Books
+横断で約束すること:
 
-へ展開する。
+- 「あなたは整合性と主導感を極端に重視する。この作品は整合性が低いので除外」
 
-最終的にはジャンルを超えた深層嗜好分析プラットフォームを目指す。
+約束しないこと:
+
+- 「LoL の Hwei が好きだからこの SF が好き」（facet の勝手な直訳）
+
+---
+
+# ドキュメント
+
+- [docs/concept.md](docs/concept.md) … Preference OS の思想
+- [docs/design-notes.md](docs/design-notes.md) … 設計上の問題点と改善
+- [docs/question-design.md](docs/question-design.md) … 取得モデルと facet 対応
+- [docs/recommendation-engine.md](docs/recommendation-engine.md) … 5段パイプライン
+- [docs/architecture.md](docs/architecture.md) … 一般化スキーマ
+- [docs/roadmap.md](docs/roadmap.md) … Core → Movies Pack → Soft-attribute learning
 
 ---
 
 # Vision
 
-HeartSteal is not a recommendation service.
-
-HeartSteal is a system that discovers why people love what they love.
+拒否は切る。
+好みは分解する。
+説明は読めて直せる。
+ドメインはパックで差し替える。
